@@ -156,9 +156,17 @@ trap cleanup SIGINT
 set -o pipefail
 if [[ -n "$HOST" ]]; then
   # connecting to a mariadb server on a host
-  # do not put quotes around $DATA_OPTION as "$DATA_OPTION" because then it would be passed as database name "" which it cannot find.
-  info "running: /usr/bin/mariadb-dump --host=$HOST $DATA_OPTION --single-transaction --skip-dump-date --order-by-primary --quick --routines --events --triggers --hex-blob --max-allowed-packet=$MAX_PACKET_SIZE --user=$USERNAME --password=HIDDEN $DATABASE"
-  /usr/bin/mariadb-dump --host="$HOST" $DATA_OPTION --single-transaction --skip-dump-date --order-by-primary --quick --routines --events --triggers --hex-blob --max-allowed-packet="$MAX_PACKET_SIZE" --user="$USERNAME" --password="$PASSWORD" "$DATABASE" | gzip -$GZIP_COMPRESSION >"${dumpfile}.temp"
+  # warning: in cmd_fmt do not put quotes around %s as "%s" for DATA_OPTION  because when option not set then "%s" would be passed as database name "" which it cannot find.
+  cmd_fmt="/usr/bin/mariadb-dump --host='%s' %s --single-transaction --skip-dump-date --order-by-primary --quick --routines --events --triggers --hex-blob --max-allowed-packet='%s' --user='%s' --password='%s' '%s'"
+  cmd="$(printf "$cmd_fmt" "$HOST" "$DATA_OPTION" "$MAX_PACKET_SIZE" "$USERNAME" "$PASSWORD" "$DATABASE")"
+  cmd_in_log_msg="$(printf "$cmd_fmt" "$HOST" "$DATA_OPTION" "$MAX_PACKET_SIZE" "USERNAME" "PASSWORD" "$DATABASE")"
+  info "running: $cmd_in_log_msg"
+  # warning: we need to do : eval "$cmd" 
+  #          and not:        "$cmd"       => single quotes for option value is placed literally in the value. That is for example for option --max-allowed-packet='1G' the command gets literally '1G' as value with the single quotes in the value.
+  #                                          This happens normally a command is evaluated and -y='xxx' is replaced by -y=xxx value (this quoting is done first at tokenization step), 
+  #                                          however "$cmd" is expanded after tokenization/quoting step is already done. Thus -y='xxx' stays -y='xxx'  and value passed in option is 'xxx' -> quotes taken literal!!
+  #
+  eval "$cmd" | gzip -$GZIP_COMPRESSION >"${dumpfile}.temp"
   exit_status=$?
 else
   # Running backup script on the docker host.
@@ -167,8 +175,11 @@ else
     error "The '$CONTAINER' docker container is not running."
     exit 1
   fi
-  info "running: docker exec -t "$CONTAINER" /bin/bash -c '/usr/bin/mariadb-dump '$DATA_OPTION' --single-transaction --skip-dump-date --order-by-primary --quick --routines --events --triggers --hex-blob --max-allowed-packet='"$MAX_PACKET_SIZE"' --user='$USERNAME' --password=HIDDEN '$DATABASE"
-  docker exec -t "$CONTAINER" /bin/bash -c '/usr/bin/mariadb-dump '$DATA_OPTION' --single-transaction --skip-dump-date --order-by-primary --quick --routines --events --triggers --hex-blob --max-allowed-packet='"$MAX_PACKET_SIZE"' --user='$USERNAME' --password='$PASSWORD' '$DATABASE | gzip -$GZIP_COMPRESSION >"${dumpfile}.temp"
+  cmd_fmt="/usr/bin/mariadb-dump %s --single-transaction --skip-dump-date --order-by-primary --quick --routines --events --triggers --hex-blob --max-allowed-packet='%s' --user='%s' --password='%s' '%s'"
+  cmd_in_container="$(printf "$cmd_fmt" "$DATA_OPTION" "$MAX_PACKET_SIZE" "$USERNAME" "$PASSWORD" "$DATABASE")"
+  cmd_in_log_msg="$(printf "$cmd_fmt" "$DATA_OPTION" "$MAX_PACKET_SIZE" "USERNAME" "PASSWORD" "$DATABASE")"
+  info "running in '$CONTAINER' container: $cmd_in_log_msg"
+  docker exec -t "$CONTAINER" /bin/bash -c "$cmd_in_container" | gzip -$GZIP_COMPRESSION >"${dumpfile}.temp"
   exit_status=$?
 fi
 
